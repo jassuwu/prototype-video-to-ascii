@@ -10,15 +10,15 @@ CHARS = " .;coPO?@#" # character map
 FRAMES_DIR = "frames/animu8k" # folder with the frames data generated from ffmpeg
 FRAME_EXT = ".jpg" # extension of the frames in the FRAMES_DIR
 VIDEO_SRC = "videos/animu8k.webm" # video_file name to play the audio during the rendering
-SCALE_DOWN = 16  # Scaling factor to resize the image
-FRAME_RATE = 1 / 60  # Frame rate (60 FPS for the video)
+SCALE_DOWN = 32  # Scaling factor to resize the image
+FRAME_DURATION = 1 / 60  # Frame rate (60 FPS for the video)
 PROGRESS_BAR_LENGTH = 100  # Length of the progress bar
 
 def convert_to_ascii(img_path):
     img = cv.imread(img_path, cv.IMREAD_GRAYSCALE)
     if img is not None:
         img_down = cv.resize(img, (img.shape[1] // SCALE_DOWN, img.shape[0] // SCALE_DOWN))
-        img_normalized = img_down // 255  # Scale pixel values to [0, 1]
+        img_normalized = img_down / 255.0  # Scale pixel values to [0, 1]
         img_scaled = img_normalized * (len(CHARS) - 1)  # Scale to [0, len(CHARS) - 1]
         img_indices = img_scaled.astype(int)
         return "\n".join("".join(CHARS[idx] for idx in row) for row in img_indices)
@@ -65,15 +65,12 @@ def main():
         for idx, ascii_art in enumerate(pool.imap(convert_to_ascii, frame_paths), start=1):
             ascii_art_frames.append(ascii_art)
             print_progress_bar(idx, total_frames)
-#     for idx, frame in enumerate(frame_paths):
-#         ascii_art_frames.append(convert_to_ascii(frame))
-#         print_progress_bar(idx, total_frames)
 
     print()
-    play_audio() # actually the audio
+    play_audio()
 
     for ascii_art in ascii_art_frames:
-        display_frame(ascii_art, FRAME_RATE)
+        display_frame(ascii_art, FRAME_DURATION)
 
 if __name__ == "__main__":
     main()
