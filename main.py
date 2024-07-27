@@ -7,10 +7,10 @@ import subprocess
 from multiprocessing import Pool, cpu_count
 
 CHARS = " .;coPO?@#" # character map
-FRAMES_DIR = "frames/animu8k" # folder with the frames data generated from ffmpeg
+FRAMES_DIR = "frames/badapple" # folder with the frames data generated from ffmpeg
 FRAME_EXT = ".jpg" # extension of the frames in the FRAMES_DIR
-VIDEO_SRC = "videos/animu8k.webm" # video_file name to play the audio during the rendering
-SCALE_DOWN = 32  # Scaling factor to resize the image
+VIDEO_SRC = "videos/badapple.webm" # video_file name to play the audio during the rendering
+SCALE_DOWN = 16  # Scaling factor to resize the image
 FRAME_DURATION = 1 / 60  # Frame rate (60 FPS for the video)
 PROGRESS_BAR_LENGTH = 100  # Length of the progress bar
 
