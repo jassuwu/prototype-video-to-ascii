@@ -1,18 +1,78 @@
 #!/usr/bin/env python
-import cv2 as cv
+
 import os
+import sys
 import time
 import re
 import subprocess
 from multiprocessing import Pool, cpu_count
 
-CHARS = " .;coPO?@#" # character map
-FRAMES_DIR = "frames/badapple" # folder with the frames data generated from ffmpeg
-FRAME_EXT = ".jpg" # extension of the frames in the FRAMES_DIR
-VIDEO_SRC = "videos/badapple.webm" # video_file name to play the audio during the rendering
-SCALE_DOWN = 16  # Scaling factor to resize the image
-FRAME_DURATION = 1 / 60  # Frame rate (60 FPS for the video)
+from yt_dlp import YoutubeDL
+import cv2 as cv
+
+CHARS = " .;coPO?#@" # character map
+SCALE_DOWN = 8  # Scaling factor to resize the image
 PROGRESS_BAR_LENGTH = 100  # Length of the progress bar
+
+def get_video_id(yt_url):
+    video_id_match = re.search(r'(?:v=|\/|embed\/)([a-zA-Z0-9_-]{11})', yt_url)
+    if video_id_match:
+        return video_id_match.group(1)
+    else:
+        raise ValueError("Invalid YouTube URL")
+
+def download_yt_video(yt_url):
+    if not os.path.isdir("videos"):
+        os.mkdir("videos")
+
+    video_id = get_video_id(yt_url)
+    output_path = f"videos/{video_id}.mp4"
+
+    ydl_opts = {
+        "format": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "outtmpl": output_path,
+    }
+
+    with YoutubeDL(ydl_opts) as ydl_instance:
+        ydl_instance.download([yt_url])
+
+    os.system("clear")
+    return output_path
+
+def extract_frames(video_id):
+    video_path = f"videos/{video_id}.mp4"
+    frames_dir = f"frames/{video_id}"
+
+    # Open video file
+    cap = cv.VideoCapture(video_path)
+
+    # Get total number of frames in the video
+    total_frames = int(cap.get(cv.CAP_PROP_FRAME_COUNT)) - 1
+    fps = cap.get(cv.CAP_PROP_FPS)
+
+    if not os.path.isdir(frames_dir):
+        os.makedirs(frames_dir)
+    else:
+        print(f"frames dir for {video_path} already exists.")
+        return frames_dir, fps
+
+    count = 0
+    success = True
+
+    print("Processing video to frames")
+    while success:
+        success, frame = cap.read()
+        if success:
+            frame_filename = f"{frames_dir}/{count}.jpg"
+            cv.imwrite(frame_filename, frame)
+        count += 1
+        print_progress_bar(count, total_frames)
+
+    cap.release()
+    print()  # Move to the next line after progress bar
+    os.system("clear")
+
+    return frames_dir, fps
 
 def convert_to_ascii(img_path):
     img = cv.imread(img_path, cv.IMREAD_GRAYSCALE)
@@ -24,8 +84,8 @@ def convert_to_ascii(img_path):
         return "\n".join("".join(CHARS[idx] for idx in row) for row in img_indices)
     return ""
 
-def play_audio():
-    return subprocess.Popen(['ffplay', '-nodisp', '-autoexit', VIDEO_SRC], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+def play_audio(video_path):
+    return subprocess.Popen(['ffplay', '-nodisp', '-autoexit', video_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 def extract_number(filename):
     match = re.search(r'(\d+)', filename)
@@ -46,15 +106,19 @@ def display_frame(ascii_art, frame_duration):
     if sleep_time > 0:
         time.sleep(sleep_time)
 
-def main():
-    frame_files = [f for f in os.listdir(FRAMES_DIR) if f.endswith(FRAME_EXT)]
+def main(yt_url):
+    video_path = download_yt_video(yt_url)
+
+    frames_dir, fps = extract_frames(get_video_id(yt_url))
+
+    frame_files = os.listdir(frames_dir)
     if not frame_files:
         print("No frames found in the directory.")
         return
 
     # Sort files numerically
     frame_files.sort(key=extract_number)
-    frame_paths = [os.path.join(FRAMES_DIR, f) for f in frame_files]
+    frame_paths = [os.path.join(frames_dir, f) for f in frame_files]
 
     # Show progress meter for conversion
     print("Processing frames to ASCII")
@@ -67,10 +131,11 @@ def main():
             print_progress_bar(idx, total_frames)
 
     print()
-    play_audio()
+    play_audio(video_path)
 
     for ascii_art in ascii_art_frames:
-        display_frame(ascii_art, FRAME_DURATION)
+        display_frame(ascii_art, 1 / int(fps))
 
 if __name__ == "__main__":
-    main()
+    yt_url = sys.argv[1]
+    main(yt_url)
