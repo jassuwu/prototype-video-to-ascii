@@ -9,8 +9,10 @@ from multiprocessing import Pool, cpu_count
 
 from yt_dlp import YoutubeDL
 import cv2 as cv
+import numpy as np
 
 CHARS = " .;coPO?#@" # character map
+ANGLE_CHARS = "|/_\\"
 SCALE_DOWN = 8  # Scaling factor to resize the image
 PROGRESS_BAR_LENGTH = 100  # Length of the progress bar
 
@@ -77,11 +79,45 @@ def extract_frames(video_id):
 def convert_to_ascii(img_path):
     img = cv.imread(img_path, cv.IMREAD_GRAYSCALE)
     if img is not None:
-        img_down = cv.resize(img, (img.shape[1] // SCALE_DOWN, img.shape[0] // SCALE_DOWN))
-        img_normalized = img_down / 255.0  # Scale pixel values to [0, 1]
-        img_scaled = img_normalized * (len(CHARS) - 1)  # Scale to [0, len(CHARS) - 1]
+        new_size = (img.shape[1] // SCALE_DOWN, img.shape[0] // SCALE_DOWN)
+        img = cv.resize(img, new_size)
+        grad_x = cv.Sobel(img, cv.CV_64F, 1, 0, ksize=3)
+        grad_y = cv.Sobel(img, cv.CV_64F, 0, 1, ksize=3)
+        angle = np.arctan2(grad_y, grad_x) * (180 / np.pi)  # Convert to degrees
+        angle = np.where(angle < 0, angle + 180, angle)
+
+        edges_down = cv.Canny(img, 100, 200)
+        # edges_down = cv.resize(edges, new_size, interpolation=cv.INTER_NEAREST)
+        img_normalized = img / 255.0
+        img_scaled = img_normalized * (len(CHARS) - 1)
         img_indices = img_scaled.astype(int)
-        return "\n".join("".join(CHARS[idx] for idx in row) for row in img_indices)
+
+        grad_x_down = cv.resize(grad_x, new_size)
+        grad_y_down = cv.resize(grad_y, new_size)
+        angle_down = np.arctan2(grad_y_down, grad_x_down) * (180 / np.pi)
+        angle_down = np.where(angle_down < 0, angle_down + 180, angle_down)
+
+        output = np.full(img_indices.shape, ' ', dtype='<U1')
+        for i in range(img_indices.shape[0]):
+            for j in range(img_indices.shape[1]):
+                output[i, j] = CHARS[img_indices[i, j]]
+
+        for i in range(edges_down.shape[0]):
+            for j in range(edges_down.shape[1]):
+                if edges_down[i, j] > 0:  # Edge detected
+                    ang = angle_down[i, j]
+                    if 0 <= ang < 22.5 or 157.5 <= ang < 180:
+                        output[i, j] = ANGLE_CHARS[0]  # _
+                    elif 22.5 <= ang < 67.5:
+                        output[i, j] = ANGLE_CHARS[1]  # /
+                    elif 67.5 <= ang < 112.5:
+                        output[i, j] = ANGLE_CHARS[2]  # |
+                    elif 112.5 <= ang < 157.5:
+                        output[i, j] = ANGLE_CHARS[3]  # \
+
+        ascii_art = "\n".join("".join(output[i, j] for j in range(output.shape[1])) for i in range(output.shape[0]))
+        return ascii_art
+
     return ""
 
 def play_audio(video_path):
