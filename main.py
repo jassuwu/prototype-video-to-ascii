@@ -6,16 +6,20 @@ import time
 import re
 import subprocess
 from multiprocessing import Pool, cpu_count
-
-from yt_dlp import YoutubeDL
+import math
+import threading
 import cv2 as cv
 import numpy as np
+from yt_dlp import YoutubeDL
+import curses
 
+# Define constants
+SCALE_DOWN = 2
 CHARS = " .;coPO?#@" # character map
 ANGLE_CHARS = "|/_\\"
-SCALE_DOWN = 8  # Scaling factor to resize the image
-PROGRESS_BAR_LENGTH = 100  # Length of the progress bar
+PROGRESS_BAR_LENGTH = 100
 
+# Functions for downloading video and extracting frames
 def get_video_id(yt_url):
     video_id_match = re.search(r'(?:v=|\/|embed\/)([a-zA-Z0-9_-]{11})', yt_url)
     if video_id_match:
@@ -45,10 +49,7 @@ def extract_frames(video_id):
     video_path = f"videos/{video_id}.mp4"
     frames_dir = f"frames/{video_id}"
 
-    # Open video file
     cap = cv.VideoCapture(video_path)
-
-    # Get total number of frames in the video
     total_frames = int(cap.get(cv.CAP_PROP_FRAME_COUNT)) - 1
     fps = cap.get(cv.CAP_PROP_FPS)
 
@@ -77,51 +78,52 @@ def extract_frames(video_id):
     return frames_dir, fps
 
 def convert_to_ascii(img_path):
-    img = cv.imread(img_path, cv.IMREAD_GRAYSCALE)
-    if img is not None:
-        new_size = (img.shape[1] // SCALE_DOWN, img.shape[0] // SCALE_DOWN)
-        img = cv.resize(img, new_size)
-        grad_x = cv.Sobel(img, cv.CV_64F, 1, 0, ksize=3)
-        grad_y = cv.Sobel(img, cv.CV_64F, 0, 1, ksize=3)
-        angle = np.arctan2(grad_y, grad_x) * (180 / np.pi)  # Convert to degrees
+    img_gray = cv.imread(img_path, cv.IMREAD_GRAYSCALE)
+
+    if img_gray is not None:
+        new_size = (img_gray.shape[1] // SCALE_DOWN, img_gray.shape[0] // SCALE_DOWN)
+        img_gray = cv.resize(img_gray, new_size)
+
+        grad_x = cv.Sobel(img_gray, cv.CV_64F, 1, 0, ksize=3)
+        grad_y = cv.Sobel(img_gray, cv.CV_64F, 0, 1, ksize=3)
+        angle = np.arctan2(grad_y, grad_x) * (180 / np.pi)
         angle = np.where(angle < 0, angle + 180, angle)
 
-        edges_down = cv.Canny(img, 100, 200)
-        # edges_down = cv.resize(edges, new_size, interpolation=cv.INTER_NEAREST)
-        img_normalized = img / 255.0
+        edges_down = cv.Canny(img_gray, 100, 200)
+        img_normalized = img_gray / 255.0
         img_scaled = img_normalized * (len(CHARS) - 1)
         img_indices = img_scaled.astype(int)
 
-        grad_x_down = cv.resize(grad_x, new_size)
-        grad_y_down = cv.resize(grad_y, new_size)
-        angle_down = np.arctan2(grad_y_down, grad_x_down) * (180 / np.pi)
-        angle_down = np.where(angle_down < 0, angle_down + 180, angle_down)
-
-        output = np.full(img_indices.shape, ' ', dtype='<U1')
+        output = []
         for i in range(img_indices.shape[0]):
+            row = []
             for j in range(img_indices.shape[1]):
-                output[i, j] = CHARS[img_indices[i, j]]
-
-        for i in range(edges_down.shape[0]):
-            for j in range(edges_down.shape[1]):
-                if edges_down[i, j] > 0:  # Edge detected
-                    ang = angle_down[i, j]
+                char = CHARS[img_indices[i, j]]
+                if edges_down[i, j] > 0:
+                    ang = angle[i, j]
                     if 0 <= ang < 22.5 or 157.5 <= ang < 180:
-                        output[i, j] = ANGLE_CHARS[0]  # _
+                        char = ANGLE_CHARS[0]
                     elif 22.5 <= ang < 67.5:
-                        output[i, j] = ANGLE_CHARS[1]  # /
+                        char = ANGLE_CHARS[1]
                     elif 67.5 <= ang < 112.5:
-                        output[i, j] = ANGLE_CHARS[2]  # |
+                        char = ANGLE_CHARS[2]
                     elif 112.5 <= ang < 157.5:
-                        output[i, j] = ANGLE_CHARS[3]  # \
+                        char = ANGLE_CHARS[3]
 
-        ascii_art = "\n".join("".join(output[i, j] for j in range(output.shape[1])) for i in range(output.shape[0]))
-        return ascii_art
+                row.append(char)
+
+            output.append(row)
+
+        return output
 
     return ""
 
 def play_audio(video_path):
     return subprocess.Popen(['ffplay', '-nodisp', '-autoexit', video_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+def play_audio_async(video_path):
+    audio_thread = threading.Thread(target=play_audio, args=(video_path,))
+    audio_thread.start()
 
 def extract_number(filename):
     match = re.search(r'(\d+)', filename)
@@ -133,18 +135,37 @@ def print_progress_bar(completed, total, bar_length=PROGRESS_BAR_LENGTH):
     bar = '#' * filled_length + '-' * (bar_length - filled_length)
     print(f'\r[{bar}] {completed}/{total} {percent:.2f}% Complete', end='')
 
-def display_frame(ascii_art, frame_duration):
-    start_time = time.time()
-    os.system("clear")
-    print(ascii_art)
-    elapsed_time = time.time() - start_time
-    sleep_time = frame_duration - elapsed_time
-    if sleep_time > 0:
-        time.sleep(sleep_time)
+# Main display function
+def display_ascii_frames_with_curses(ascii_art_frames, fps):
+    """Display ASCII frames using curses for optimized terminal output."""
+    def render_frames(stdscr):
+        frame_duration = 1 / fps
+        curses.start_color()
+        curses.init_pair(1, curses.COLOR_WHITE, curses.COLOR_BLACK)
+        curses.curs_set(0)
+        height, width = stdscr.getmaxyx()
 
+        for ascii_art in ascii_art_frames:
+            start_time = time.time()
+            stdscr.clear()
+
+            for i, row in enumerate(ascii_art):
+                if i >= height:
+                    break
+
+                stdscr.addstr(i, 0, ''.join(row[:width]))
+
+            stdscr.refresh()
+            elapsed_time = time.time() - start_time
+            sleep_time = frame_duration - elapsed_time
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+    curses.wrapper(render_frames)
+
+# Main execution
 def main(yt_url):
     video_path = download_yt_video(yt_url)
-
     frames_dir, fps = extract_frames(get_video_id(yt_url))
 
     frame_files = os.listdir(frames_dir)
@@ -152,25 +173,18 @@ def main(yt_url):
         print("No frames found in the directory.")
         return
 
-    # Sort files numerically
     frame_files.sort(key=extract_number)
     frame_paths = [os.path.join(frames_dir, f) for f in frame_files]
 
-    # Show progress meter for conversion
     print("Processing frames to ASCII")
-    total_frames = len(frame_paths)
     ascii_art_frames = []
 
     with Pool(cpu_count()) as pool:
-        for idx, ascii_art in enumerate(pool.imap(convert_to_ascii, frame_paths), start=1):
+        for ascii_art in pool.imap(convert_to_ascii, frame_paths):
             ascii_art_frames.append(ascii_art)
-            print_progress_bar(idx, total_frames)
-
-    print()
-    play_audio(video_path)
-
-    for ascii_art in ascii_art_frames:
-        display_frame(ascii_art, 1 / int(fps))
+    
+    play_audio_async(video_path)
+    display_ascii_frames_with_curses(ascii_art_frames, fps)
 
 if __name__ == "__main__":
     yt_url = sys.argv[1]
